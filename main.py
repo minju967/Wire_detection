@@ -20,7 +20,7 @@ random.seed(0)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-name", "--name", type=str, help="Name of the experiment", default="model_save")
-parser.add_argument("-example", "--ex_path", type=str, help="path of the example_file", default="D:\\Data\\crop_dataset\\train\\B\\505.png")
+parser.add_argument("-example", "--ex_path", type=str, help="path of the example_file", default="D:\\Data\\crop_dataset\\train\\E2\\7133.png")
 parser.add_argument("-bs", "--batchSize", type=int, help="Batch size for the second stage", default=128)
 parser.add_argument("-lr", type=float, help="learning rate", default=5e-5)
 parser.add_argument("-weight_decay", type=float, help="weight decay", default=0.0)
@@ -32,10 +32,6 @@ print("쿠다 가능 :{}".format(torch.cuda.is_available()))
 print("현재 디바이스 :{}".format(torch.cuda.current_device()))
 print("디바이스 갯수 :{}".format(torch.cuda.device_count()))
 
-for idx in range(0, torch.cuda.device_count()):
-    print("디바이스 :{}".format(torch.cuda.device(idx)))
-    print("디바이스 이름 :{}".format(torch.cuda.get_device_name(idx)))
-
 class ImageTransform() :
     def __init__(self, resize, mean, std):
         self.data_transform = {
@@ -43,14 +39,18 @@ class ImageTransform() :
                 transforms.Resize((224,224)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+                transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                     std=[0.5, 0.5, 0.5])
             ]),
             'val': transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+                transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                     std=[0.5, 0.5, 0.5])
+            ]),
+            'show': transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor()
             ])
         }
 
@@ -71,8 +71,6 @@ class HymenoperaDataset(data.Dataset):
     def __getitem__(self, index):
         '''전처리한 화상의 텐서 형식 데이터와 라벨 획득'''
 
-        # idx번째 화상 로드
-        # print(self.file_list[index])
         img_path = self.file_list[index]
         img = Image.open(img_path)
 
@@ -82,6 +80,8 @@ class HymenoperaDataset(data.Dataset):
             label = img_path.split('\\')[-2]
         elif self.phase == 'val':
             label = img_path.split('\\')[-2]
+        elif self.phase == 'show':
+            return img_transformed
         # 라벨을 숫자로
         if label == 'B':
             label = 0
@@ -102,6 +102,23 @@ def create_folder(log_dir):
         shutil.rmtree(log_dir)
         os.mkdir(log_dir)
 
+def get_mean_std(dataset):
+    meanRGB = [np.mean(image.numpy(), axis=(1, 2)) for image in dataset]
+    stdRGB = [np.std(image.numpy(), axis=(1, 2)) for image in dataset]
+
+    meanR = np.mean([m[0] for m in meanRGB])
+    meanG = np.mean([m[1] for m in meanRGB])
+    meanB = np.mean([m[2] for m in meanRGB])
+
+    stdR = np.std([s[0] for s in stdRGB])
+    stdG = np.std([s[1] for s in stdRGB])
+    stdB = np.std([s[2] for s in stdRGB])
+
+    mean = [meanR, meanG, meanB]
+    std = [stdR, stdG, stdB]
+
+    return mean, std
+
 def show_example(path):
     image_file_path = path
     img = Image.open(image_file_path)
@@ -110,8 +127,8 @@ def show_example(path):
     plt.show()
 
     size = 224
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
+    mean = (0.567, 0.570, 0.571)
+    std = (0.102, 0.103, 0.103)
 
     transform = ImageTransform(size, mean, std)
     img_transformed = transform(img, phase='train')
@@ -214,11 +231,13 @@ def main():
     val_list = make_datapath_list(phase='val')
 
     size = 224
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
+    mean = (0.567, 0.570, 0.571)
+    std = (0.102, 0.103, 0.103)
 
-    train_dataset = HymenoperaDataset(file_list=train_list, transform=ImageTransform(size, mean, std), phase='train')
+    train_dataset = HymenoperaDataset(file_list=train_list, transform=ImageTransform(size, mean, std), phase='show')
     val_dataset = HymenoperaDataset(file_list=val_list, transform=ImageTransform(size, mean, std), phase='val')
+
+    # mean, std = get_mean_std(train_dataset)
 
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batchSize, shuffle=True)
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batchSize, shuffle=False)
@@ -234,7 +253,9 @@ def main():
 
     net.train()
     params_to_update = []
-    update_param_names = ['classifier.5.weight', 'classifier.5.bias', 'classifier.6.weight', 'classifier.6.bias']
+    update_param_names = []
+    update_param_names.extend([f'classifier.{i}.weight' for i in range(7)])
+    update_param_names.extend([f'classifier.{i}.bias' for i in range(7)])
 
     # updata 파라미터 외에 파라미터 fix
     for name, param in net.named_parameters():

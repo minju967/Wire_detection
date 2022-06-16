@@ -16,7 +16,8 @@ from PIL import Image
 
 def make_datapath_list(folder, n):
     rootpath = 'D:\\Data'
-    cls = ['B', 'D', 'E']
+    # cls = ['B', 'D', 'E']
+    cls = ['E']
 
     path_list = []
     for c in cls:
@@ -28,11 +29,14 @@ def make_datapath_list(folder, n):
     return path_list
 
 def find_region(images):
+    size = 224
+    mean = [0.567, 0.570, 0.571]
+    std = [0.102, 0.103, 0.103]
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((size, size)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=mean,
+                             std=std)
     ])
     region_con = np.zeros((1, 3, 224, 224))
     for i, img_path in enumerate(images):
@@ -67,7 +71,6 @@ model.classifier[6] = nn.Linear(4096, 3).cuda(0)
 pt_path = 'C:\\Users\\user\\PycharmProjects\\Wire_detection\\model_save\\model.pt'
 model.load_state_dict(torch.load(pt_path))
 model.eval()
-print(model)
 
 for idx, image_set in enumerate(images_6):
     obj_name = image_set[0].split('\\')[-1][:-8]
@@ -81,7 +84,8 @@ for idx, image_set in enumerate(images_6):
         outputs = model(input.unsqueeze(dim=0))
         pred_val = torch.max(outputs, 1)[0]
         pred_idx = torch.max(outputs, 1)[1]
-        pred_dict[str(pred_idx.item())] += 1
+        if pred_val.item() > 0.5:
+            pred_dict[str(pred_idx.item())] += 1
 
     result = list(pred_dict.values())
     print(f'class:{obj_class} || 고속가공:{result[0]} 연삭:{result[1]} 와이어:{result[2]}')
