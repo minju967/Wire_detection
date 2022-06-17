@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import torch
 import torch.optim as optim
@@ -12,6 +14,7 @@ import glob
 import torch.utils.data as data
 
 from PIL import Image
+from tensorboardX import SummaryWriter
 
 # random seed
 torch.manual_seed(0)
@@ -85,9 +88,9 @@ class HymenoperaDataset(data.Dataset):
         # 라벨을 숫자로
         if label == 'B':
             label = 0
-        elif label == 'D':
+        elif label == 'D' or label == 'M_D' or label == 'D1':
             label = 1
-        elif label == 'E' or label == 'E2':
+        elif label == 'E' or label == 'M_E' or label == 'E1':
             label = 2
         else:
             print(label)
@@ -97,10 +100,10 @@ def create_folder(log_dir):
     # make summary folder
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
-    else:
-        print('WARNING: summary folder already exists!! It will be overwritten!!')
-        shutil.rmtree(log_dir)
-        os.mkdir(log_dir)
+    # else:
+    #     print('WARNING: summary folder already exists!! It will be overwritten!!')
+    #     shutil.rmtree(log_dir)
+    #     os.mkdir(log_dir)
 
 def get_mean_std(dataset):
     meanRGB = [np.mean(image.numpy(), axis=(1, 2)) for image in dataset]
@@ -140,7 +143,8 @@ def show_example(path):
 
 def make_datapath_list(phase):
     rootpath = 'D:\\Data\\crop_dataset'
-    cls = ['B', 'D', 'E', 'E2']
+    # cls = ['B', 'D', 'D2', 'E2']
+    cls = ['B', 'D', 'E', 'M_D', 'M_E', 'D1', 'E1']
     path_list = []
     for c in cls:
         p = os.path.join(rootpath, phase, c)
@@ -152,6 +156,10 @@ def make_datapath_list(phase):
     return path_list
 
 def train(net, dataloaders_dict, criterion, optimizer, num_epochs, log_dir):
+    if log_dir is not None:
+        writer = SummaryWriter(log_dir+'\\logs')
+
+    i_acc = 0
     best_acc = 0.0
     for epoch in range(0, num_epochs):
         print(f'Epoch {epoch + 1}/ {num_epochs}')
@@ -190,6 +198,8 @@ def train(net, dataloaders_dict, criterion, optimizer, num_epochs, log_dir):
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()
+                        if log_dir is not None:
+                            writer.add_scalar('train/train_loss', loss, i_acc + idx + 1)
 
                     else:
                         for i in range(results.size()[0]):
@@ -203,30 +213,46 @@ def train(net, dataloaders_dict, criterion, optimizer, num_epochs, log_dir):
 
                     epoch_corrects += torch.sum(preds == labels.data)
                     iter_acc = torch.sum(preds == labels.data).float() / labels.size()[0]
+                    if log_dir is not None:
+                        writer.add_scalar('train/train_overall_acc', iter_acc, i_acc + i + 1)
 
-                    if phase == 'train':
+                    if phase == 'train' and idx % 5 == 0:
                         print('epoch %d, step [%d/%d]: train_loss %.3f; train_acc %.3f'
                               % (epoch + 1, idx + 1, len(dataloaders_dict[phase]), loss, iter_acc))
 
             epoch_acc = epoch_corrects.double() / len(dataloaders_dict[phase].dataset)
 
-            print(f'{phase} Loss {epoch_loss:.4f} Acc : {epoch_acc:.4f}')
-            if phase == 'val' and epoch_acc > best_acc:
-                best_acc = epoch_acc
-                torch.save(net.state_dict(), log_dir+'\\model.pt')
+            i_acc += idx
 
+            if phase == 'val':
+                val_class_acc = (samples_class - wrong_class) / samples_class
+                val_class_acc = [round(val_class_acc[i],2) for i in range(3)]
+                val_mean_class_acc = np.mean((samples_class - wrong_class) / samples_class)
+                print(f'val class acc. : 고속 가공: {val_class_acc[0]:.3f}, 연삭: {val_class_acc[1]:.3f}, 와이어: {val_class_acc[2]:.3f}, Acc: {val_mean_class_acc:.4f}')
+
+                writer.add_scalar('val/val_mean_class_acc', val_mean_class_acc, epoch+1)
+                writer.add_scalar('val/val_overall_acc', epoch_acc, epoch+1)
+                writer.add_scalar('val/val_loss', epoch_loss, epoch+1)
+
+                if epoch_acc > best_acc:
+                    best_acc = epoch_acc
+                    torch.save(net.state_dict(), os.path.join(log_dir, 'model_1048.pt'))
+            else:
+                print(f'{phase} Loss {epoch_loss:.4f} Acc : {epoch_acc:.4f}')
+
+    writer.export_scalars_to_json(log_dir + "\\all_scalars.json")
+    writer.close()
 
 def main():
     args = parser.parse_args()
 
     # show_example(args.ex_path)
-
-    log_dir = args.name
-    create_folder(args.name)
+    path = 'C:\\Users\\user\\PycharmProjects\\Wire_detection'
+    log_dir = os.path.join(path, args.name)
+    create_folder(log_dir)
     config_f = open(os.path.join(log_dir, 'config.json'), 'w')
     json.dump(vars(args), config_f)
     config_f.close()
-
     train_list = make_datapath_list(phase='train')
     val_list = make_datapath_list(phase='val')
 
@@ -234,7 +260,7 @@ def main():
     mean = (0.567, 0.570, 0.571)
     std = (0.102, 0.103, 0.103)
 
-    train_dataset = HymenoperaDataset(file_list=train_list, transform=ImageTransform(size, mean, std), phase='show')
+    train_dataset = HymenoperaDataset(file_list=train_list, transform=ImageTransform(size, mean, std), phase='train')
     val_dataset = HymenoperaDataset(file_list=val_list, transform=ImageTransform(size, mean, std), phase='val')
 
     # mean, std = get_mean_std(train_dataset)
@@ -250,6 +276,9 @@ def main():
 
     net = models.vgg16(pretrained=True).cuda(0)
     net.classifier[6] = nn.Linear(4096, 3).cuda(0)
+    # net.classifier.add_module('7', nn.Softmax(3))
+    # print(net)
+    # sys.exit()
 
     net.train()
     params_to_update = []
@@ -270,5 +299,17 @@ def main():
 
     train(net, dataloaders_dict, criterion, optimizer, args.epochs, log_dir)
 
+def move_file():
+    origin = 'C:\\Users\\user\\PycharmProjects\\Reaserch\\Region_proposal\\save_file\\wire_image'
+    copy = 'D:\\Data\\crop_dataset\\val\\M_E'
+
+    data = os.listdir(origin)
+    data = random.sample(data, k=100)
+    for d in data:
+        ori_p = os.path.join(origin, d)
+        copy_p = os.path.join(copy, d)
+        shutil.move(ori_p, copy_p)
+
 if __name__ == '__main__':
     main()
+    # move_file()
